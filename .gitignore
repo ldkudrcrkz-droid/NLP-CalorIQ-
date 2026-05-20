@@ -2,3 +2,6 @@
 *.csv
 node_modules
 .venv
+AOL/*.pkl
+AOL/*.csv
+AOL/__pycache__/

@@ -280,23 +280,66 @@ Steps:
 # =========================
 # MAIN
 # =========================
-if __name__ == "__main__":
+# ==============================================================================
+# 🚀 INITIALIZATION & FASTAPI API ROUTING
+# ==============================================================================
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 
-    df = load_or_preprocess("RAW_recipes.csv")
+# 1. Inisialisasi Data dan Recommender global (agar tidak load berulang-ulang setiap request)
+print("📦 Initializing CalorIQ System...")
+df_recipes = load_or_preprocess("RAW_recipes.csv")
 
-    rec = SBERTRecommender()
-    rec.fit(df)
+rec_system = SBERTRecommender()
+rec_system.fit(df_recipes)
 
-    bot = CalorIQBot(rec)
+bot = CalorIQBot(rec_system)
+print("🚀 CalorIQ System is Ready!")
 
-    user = {
-        "gender": "male",
-        "age": 20,
-        "weight": 65,
-        "height": 165
-    }
+# 2. Inisialisasi FastAPI Instance (Ini variabel 'app' yang dicari Uvicorn!)
+app = FastAPI(title="CalorIQ Recommendation API")
 
-    query = "I want chicken steak with mashed potato low fat"
+# 3. Konfigurasi CORS (Penting agar Frontend Vite/React kamu bisa akses API ini)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Kamu bisa batasi ke ["http://localhost:5173"] jika mau lebih ketat
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-    print(bot.generate(user, query))
+# 4. Definisikan Skema Data Input dari Frontend
+class UserProfile(BaseModel):
+    gender: str
+    age: int
+    weight: float
+    height: float
 
+class ChatRequest(BaseModel):
+    profile: UserProfile
+    query: str
+
+# 5. Endpoint API yang akan ditembak oleh Frontend web kamu
+@app.post("/api/chat")
+def chat_endpoint(payload: ChatRequest):
+    try:
+        user_profile_dict = {
+            "gender": payload.profile.gender,
+            "age": payload.profile.age,
+            "weight": payload.profile.weight,
+            "height": payload.profile.height
+        }
+        
+        # Panggil bot generator milikmu
+        bot_response = bot.generate(user_profile_dict, payload.query)
+        
+        return {"response": bot_response}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Endpoint opsional untuk ngecek server sehat atau tidak
+@app.get("/")
+def index():
+    return {"status": "online", "message": "CalorIQ Backend Engine is running smoothly."}

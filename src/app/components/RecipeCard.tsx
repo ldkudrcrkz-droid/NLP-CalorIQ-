@@ -26,7 +26,7 @@ export function RecipeCard({ recipe, onClick }: RecipeCardProps) {
       className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden hover:shadow-md transition-shadow cursor-pointer"
       onClick={onClick}
     >
-      {recipe.imageUrl && (
+      {/* {recipe.imageUrl && (
         <div className="h-48 overflow-hidden bg-gray-100">
           <img
             src={recipe.imageUrl}
@@ -34,7 +34,7 @@ export function RecipeCard({ recipe, onClick }: RecipeCardProps) {
             className="w-full h-full object-cover"
           />
         </div>
-      )}
+      )} */}
 
       <div className="p-4">
         <h3 className="font-semibold text-lg text-gray-900 mb-2">{recipe.name}</h3>

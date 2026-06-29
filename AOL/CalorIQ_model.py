@@ -4,6 +4,7 @@ import re
 import ast
 import os
 import pickle
+import traceback
 
 from sentence_transformers import SentenceTransformer, util
 
@@ -36,16 +37,24 @@ def parse_list_column(text):
     except:
         return ""
 
+def _parse_list_raw(text) -> list:
+    """Parse list column menjadi list of strings (tidak di-preprocess, untuk tampilan)."""
+    try:
+        return ast.literal_eval(text)
+    except:
+        return []
+
 def parse_nutrition(text):
     try:
         values = ast.literal_eval(text)
         return {
             "calories": values[0],
             "fat": values[1],
-            "protein": values[4]
+            "protein": values[4],
+            "carbs": values[6] if len(values) > 6 else np.nan
         }
     except:
-        return {"calories": np.nan, "fat": np.nan, "protein": np.nan}
+        return {"calories": np.nan, "fat": np.nan, "protein": np.nan, "carbs": np.nan}
 
 # =========================
 # LOAD DATA
@@ -81,6 +90,7 @@ def load_or_preprocess(csv_path):
     df['calories'] = df['calories'].fillna(df['calories'].median())
     df['protein'] = df['protein'].fillna(0)
     df['fat'] = df['fat'].fillna(df['fat'].median())
+    df['carbs'] = df['carbs'].fillna(df['carbs'].median()) if 'carbs' in df.columns else 0
 
     # REMOVE EXTREME OUTLIERS
     df = df[
@@ -89,7 +99,12 @@ def load_or_preprocess(csv_path):
         (df['fat'] < 60)
     ]
 
-    df = df[['name', 'combined', 'calories', 'protein', 'fat', 'steps_clean']]
+    # Simpan steps asli (readable) dan ingredients asli untuk ditampilkan di frontend
+    df['steps_original'] = df['steps'].apply(lambda x: _parse_list_raw(x))
+    df['ingredients_original'] = df['ingredients'].apply(lambda x: _parse_list_raw(x)) if 'ingredients' in df.columns else ''
+
+    df = df[['name', 'combined', 'calories', 'protein', 'fat', 'carbs', 'steps_clean',
+             'steps_original', 'ingredients_original']]
 
     df.to_pickle(cache_path)
     print("✅ Cached!")
@@ -146,7 +161,7 @@ class SBERTRecommender:
         self.embeddings = None
 
     def fit(self, df):
-        self.df = df.reset_index(drop=True) # Reset index menjamin keselarasan dengan tensor embeddings
+        self.df = df.reset_index(drop=True)
 
         if os.path.exists("embeddings_full.pkl"):
             print("⚡ Loading embeddings...")
@@ -166,37 +181,55 @@ class SBERTRecommender:
         df = self.df.copy()
         emb = self.embeddings
 
-        # Filter teks awal berdasarkan representasi index integer agar aman dari pergeseran dimensi tensor
+        # FIX: Filter dengan include_words menggunakan integer index agar aman
         if include_words:
+            combined_mask = pd.Series([False] * len(df), index=df.index)
             for w in include_words:
                 mask = df['combined'].str.contains(w, na=False)
-                if mask.sum() > 0:
-                    indices = mask.index[mask].tolist()
-                    df = df[mask]
-                    if isinstance(emb, np.ndarray):
-                        emb = emb[indices]
-                    else:
-                        emb = emb[indices]
+                combined_mask = combined_mask | mask
+
+            if combined_mask.sum() > 0:
+                indices = combined_mask.index[combined_mask].tolist()
+                df = df.loc[indices]
+                if isinstance(emb, np.ndarray):
+                    emb = emb[indices]
+                else:
+                    # tensor: convert ke numpy dulu agar indexing aman
+                    emb = emb[indices]
 
         # SBERT Similarity Calculation
         query_emb = self.model.encode(query, convert_to_tensor=True)
+
+        # FIX: Pastikan emb tidak kosong sebelum cos_sim
+        if len(df) == 0:
+            df = self.df.copy()
+            emb = self.embeddings
+
         scores = util.cos_sim(query_emb, emb)[0].cpu().numpy()
+
+        # FIX: Panjang scores harus sama dengan df
+        if len(scores) != len(df):
+            df = self.df.copy()
+            emb = self.embeddings
+            scores = util.cos_sim(query_emb, emb)[0].cpu().numpy()
+
+        df = df.copy()
         df['score'] = scores
 
         # --- NUTRITION FILTERS ---
         if constraints.get("low_fat"):
             df = df[df['fat'] < 20]
 
-        # Jika parameter meal_target dikirim oleh evaluator/bot, saring porsinya secara dinamis
         if meal_target is not None:
             df = df[df['calories'] <= meal_target]
         else:
-            df = df[df['calories'] < 600] # Batas default awal
+            df = df[df['calories'] < 600]
 
-        # Jika saringan terlalu ketat hingga data kosong, kembalikan data tanpa filter kalori sebagai fallback
+        # Fallback jika filter terlalu ketat
         if df.empty:
             df = self.df.copy()
             scores_fallback = util.cos_sim(query_emb, self.embeddings)[0].cpu().numpy()
+            df = df.copy()
             df['score'] = scores_fallback
 
         return df.sort_values("score", ascending=False).head(top_n)
@@ -220,69 +253,108 @@ class CalorIQBot:
         # ===== MAIN DISH =====
         main = None
         if entities["protein"] and entities["dish"]:
-            main = self.rec.search(
+            result = self.rec.search(
                 query,
                 constraints,
                 include_words=entities["protein"] + entities["dish"],
                 meal_target=meal_target
-            ).head(1)
+            )
+            if not result.empty:
+                main = result.head(1)
 
         # ===== SIDE DISH =====
         side = None
         if entities["carb"]:
-            side = self.rec.search(
+            result = self.rec.search(
                 query,
                 constraints,
                 include_words=entities["carb"],
                 meal_target=meal_target
-            ).head(1)
+            )
+            if not result.empty:
+                side = result.head(1)
 
-        recs = pd.concat([main, side]).drop_duplicates()
+        parts = [x for x in [main, side] if x is not None and not x.empty]
+        if parts:
+            recs = pd.concat(parts).drop_duplicates()
+        else:
+            recs = pd.DataFrame()
 
-        # Fallback seandainya kosong
         if recs.empty:
-            recs = self.rec.search(query, constraints, meal_target=meal_target).head(2)
+            recs = self.rec.search(query, constraints, meal_target=meal_target).head(5)
+
+        if recs.empty:
+            return {
+                "message": "Maaf, tidak ditemukan rekomendasi yang sesuai. Coba kata kunci berbeda.",
+                "recipes": []
+            }
 
         total_cal = recs['calories'].sum()
+        fits = total_cal <= meal_target
 
-        # =========================
-        # RESPONSE GENERATION
-        # =========================
-        response = f"""🍽️ Personalized Recommendation
+        # Build structured recipe list untuk frontend RecipeCard
+        recipes = []
+        for i, (_, r) in enumerate(recs.iterrows()):
+            # Ambil steps asli (readable), fallback ke steps_clean jika tidak ada
+            steps_raw = r.get('steps_original', [])
+            if not isinstance(steps_raw, list) or len(steps_raw) == 0:
+                # Fallback: split steps_clean
+                steps_raw = [s.strip().capitalize() for s in
+                             re.split(r'\.\s+|,\s+', str(r.get('steps_clean', '')))
+                             if len(s.strip()) > 20][:5]
 
-Query: "{query}"
+            ingredients_raw = r.get('ingredients_original', [])
+            if not isinstance(ingredients_raw, list):
+                ingredients_raw = []
 
-📊 BMI: {bmi:.2f}
-🔥 Target per meal: {meal_target:.0f} kcal
-"""
+            recipes.append({
+                "id": str(i),
+                "name": str(r['name']).title(),
+                "description": f"A personalized recipe matching your query: {query}",
+                "calories": round(float(r['calories']), 1),
+                "protein": round(float(r['protein']), 1),
+                "fat": round(float(r['fat']), 1),
+                "carbs": round(float(r['carbs']), 1) if pd.notna(r.get('carbs', np.nan)) else 0,
+                "ingredients": ingredients_raw[:10],  # max 10 bahan
+                "steps": steps_raw[:6],               # max 6 langkah
+            })
 
-        for _, r in recs.iterrows():
-            steps = re.split(r'\.\s+|,\s+', r['steps_clean'])
-            response += f"""
---------------------------------
-🍽️ {r['name'].title()}
-Calories: {r['calories']:.1f} kcal | Protein: {r['protein']:.1f} g
+        # Summary message — naratif, menyebut nama resep secara eksplisit
+        status = "fits your nutritional target" if fits else "Slightly above your recommended calories"
+        message = self._build_narrative_message(recipes, query, status, bmi, meal_target, total_cal)
 
-Steps:
-"""
-            count = 0
-            for s in steps:
-                if len(s.strip()) > 20:
-                    count += 1
-                    response += f"{count}. {s.strip().capitalize()}\n"
-                if count == 5:
-                    break
+        return {"message": message, "recipes": recipes}
 
-        response += f"\n👉 Total calories: {total_cal:.1f} kcal\n"
+    def _build_narrative_message(self, recipes, query, status, bmi, meal_target, total_cal):
+        """Susun kalimat pembuka yang naratif (menyebut nama resep), bukan template statis."""
+        names = [r["name"] for r in recipes]
 
-        if total_cal <= meal_target:
-            response += "✅ Fits your nutritional needs\n"
+        if len(names) == 1:
+            names_str = names[0]
+        elif len(names) == 2:
+            names_str = f"{names[0]} and {names[1]}"
         else:
-            response += "⚠️ Above recommended calories\n"
+            names_str = ", ".join(names[:-1]) + f", and {names[-1]}"
 
-        response += "💡 Tip: Use less oil & prefer grilling."
+        openers = [
+            "I've got just the thing for you",
+            "Here's what I found that should hit the spot",
+            "Take a look at these options",
+        ]
+        opener = openers[hash(query) % len(openers)]
 
-        return response
+        intro = (
+            f"{opener} — some delicious options to help you reach your "
+            f"\"{query}\" goal. "
+            f"{names_str} {'are' if len(names) > 1 else 'is'} great picks that line up well with what you're after."
+        )
+
+        stats = (
+            f"BMI: {bmi:.1f} | Meal target: {meal_target:.0f} kcal | "
+            f"Total calories: {total_cal:.0f} kcal. {status}."
+        )
+
+        return f"{intro}\n\n{stats}"
 
 # ==============================================================================
 # 🚀 INITIALIZATION & FASTAPI API ROUTING
@@ -321,6 +393,7 @@ class ChatRequest(BaseModel):
     query: str
 
 @app.post("/api/chat")
+@app.post("/api/recommend")  # alias agar kompatibel dengan frontend lama
 def chat_endpoint(payload: ChatRequest):
     try:
         user_profile_dict = {
@@ -329,10 +402,15 @@ def chat_endpoint(payload: ChatRequest):
             "weight": payload.profile.weight,
             "height": payload.profile.height
         }
-        bot_response = bot.generate(user_profile_dict, payload.query)
-        return {"response": bot_response}
-        
+        # bot.generate sekarang return dict: {"message": str, "recipes": list}
+        result = bot.generate(user_profile_dict, payload.query)
+        return {
+            "response": result["message"],
+            "recipes": result["recipes"]
+        }
+
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/")

@@ -5,3 +5,6 @@ node_modules
 AOL/*.pkl
 AOL/*.csv
 AOL/__pycache__/
+AOL.zip
+*.pkl
+*.csv

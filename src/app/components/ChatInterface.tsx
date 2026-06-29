@@ -51,7 +51,7 @@ export function ChatInterface({ userProfile, onUpdateProfile }: ChatInterfacePro
     setLoading(true);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/recommend', {
+      const response = await fetch('http://127.0.0.1:8000/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -73,13 +73,18 @@ export function ChatInterface({ userProfile, onUpdateProfile }: ChatInterfacePro
 
       const data = await response.json();
 
+      const messageId = (Date.now() + 1).toString();
+      const recipesWithUniqueId = Array.isArray(data.recipes)
+        ? data.recipes.map((r: Recipe) => ({ ...r, id: `${messageId}-${r.id}` }))
+        : [];
+
       const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
+        id: messageId,
         role: 'assistant',
-        content: data.content,
-        recipes: data.recipes
+        content: data.response,
+        recipes: recipesWithUniqueId,
       };
-      
+
       setMessages(prev => [...prev, assistantMessage]);
     } catch (error) {
       setMessages(prev => [...prev, {
@@ -97,7 +102,7 @@ export function ChatInterface({ userProfile, onUpdateProfile }: ChatInterfacePro
     setInput('');
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -145,7 +150,7 @@ export function ChatInterface({ userProfile, onUpdateProfile }: ChatInterfacePro
                 }`}>
                   {message.content}
                 </div>
-                {message.recipes && (
+                {message.recipes && message.recipes.length > 0 && (
                   <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
                     {message.recipes.map((recipe) => (
                       <RecipeCard
@@ -188,7 +193,7 @@ export function ChatInterface({ userProfile, onUpdateProfile }: ChatInterfacePro
               placeholder="Ask for recipe recommendations..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              onKeyPress={handleKeyPress}
+              onKeyDown={handleKeyDown}
               variant="outlined"
               size="small"
               disabled={loading}

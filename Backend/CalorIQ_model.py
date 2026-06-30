@@ -12,15 +12,12 @@ import nltk
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 
-# nltk.download('stopwords')
-# nltk.download('wordnet')
+
 
 stop_words = set(stopwords.words('english'))
 lemmatizer = WordNetLemmatizer()
 
-# =========================
-# PREPROCESS
-# =========================
+
 def preprocess_text(text):
     text = str(text).lower()
     text = re.sub(r'[^a-zA-Z]', ' ', text)
@@ -28,9 +25,7 @@ def preprocess_text(text):
     tokens = [lemmatizer.lemmatize(w) for w in tokens if w not in stop_words]
     return " ".join(tokens)
 
-# =========================
-# PARSING
-# =========================
+
 def parse_list_column(text):
     try:
         return " ".join(ast.literal_eval(text))
@@ -38,7 +33,7 @@ def parse_list_column(text):
         return ""
 
 def _parse_list_raw(text) -> list:
-    """Parse list column menjadi list of strings (tidak di-preprocess, untuk tampilan)."""
+    
     try:
         return ast.literal_eval(text)
     except:
@@ -56,9 +51,7 @@ def parse_nutrition(text):
     except:
         return {"calories": np.nan, "fat": np.nan, "protein": np.nan, "carbs": np.nan}
 
-# =========================
-# LOAD DATA
-# =========================
+
 def load_or_preprocess(csv_path):
 
     cache_path = "cleaned_recipes_full.pkl"
@@ -86,20 +79,20 @@ def load_or_preprocess(csv_path):
 
     df['combined'] = df['combined'].apply(preprocess_text)
 
-    # CLEAN
+    
     df['calories'] = df['calories'].fillna(df['calories'].median())
     df['protein'] = df['protein'].fillna(0)
     df['fat'] = df['fat'].fillna(df['fat'].median())
     df['carbs'] = df['carbs'].fillna(df['carbs'].median()) if 'carbs' in df.columns else 0
 
-    # REMOVE EXTREME OUTLIERS
+    
     df = df[
         (df['calories'] > 50) & (df['calories'] < 800) &
         (df['protein'] < 100) &
         (df['fat'] < 60)
     ]
 
-    # Simpan steps asli (readable) dan ingredients asli untuk ditampilkan di frontend
+    
     df['steps_original'] = df['steps'].apply(lambda x: _parse_list_raw(x))
     df['ingredients_original'] = df['ingredients'].apply(lambda x: _parse_list_raw(x)) if 'ingredients' in df.columns else ''
 
@@ -111,9 +104,7 @@ def load_or_preprocess(csv_path):
 
     return df
 
-# =========================
-# ENTITY EXTRACTION
-# =========================
+
 def extract_entities(query):
     q = preprocess_text(query)
 
@@ -150,9 +141,7 @@ def extract_entities(query):
         "dish": match(dish_map)
     }
 
-# =========================
-# SBERT RECOMMENDER
-# =========================
+
 class SBERTRecommender:
 
     def __init__(self):
@@ -181,7 +170,7 @@ class SBERTRecommender:
         df = self.df.copy()
         emb = self.embeddings
 
-        # FIX: Filter dengan include_words menggunakan integer index agar aman
+        
         if include_words:
             combined_mask = pd.Series([False] * len(df), index=df.index)
             for w in include_words:
@@ -194,20 +183,20 @@ class SBERTRecommender:
                 if isinstance(emb, np.ndarray):
                     emb = emb[indices]
                 else:
-                    # tensor: convert ke numpy dulu agar indexing aman
+                    
                     emb = emb[indices]
 
-        # SBERT Similarity Calculation
+        
         query_emb = self.model.encode(query, convert_to_tensor=True)
 
-        # FIX: Pastikan emb tidak kosong sebelum cos_sim
+        
         if len(df) == 0:
             df = self.df.copy()
             emb = self.embeddings
 
         scores = util.cos_sim(query_emb, emb)[0].cpu().numpy()
 
-        # FIX: Panjang scores harus sama dengan df
+        
         if len(scores) != len(df):
             df = self.df.copy()
             emb = self.embeddings
@@ -216,7 +205,7 @@ class SBERTRecommender:
         df = df.copy()
         df['score'] = scores
 
-        # --- NUTRITION FILTERS ---
+        
         if constraints.get("low_fat"):
             df = df[df['fat'] < 20]
 
@@ -225,7 +214,7 @@ class SBERTRecommender:
         else:
             df = df[df['calories'] < 600]
 
-        # Fallback jika filter terlalu ketat
+        
         if df.empty:
             df = self.df.copy()
             scores_fallback = util.cos_sim(query_emb, self.embeddings)[0].cpu().numpy()
@@ -234,9 +223,7 @@ class SBERTRecommender:
 
         return df.sort_values("score", ascending=False).head(top_n)
 
-# =========================
-# CHATBOT
-# =========================
+
 class CalorIQBot:
 
     def __init__(self, rec):
@@ -250,7 +237,7 @@ class CalorIQBot:
         constraints = {"low_fat": "low fat" in query.lower()}
         entities = extract_entities(query)
 
-        # ===== MAIN DISH =====
+        
         main = None
         if entities["protein"] and entities["dish"]:
             result = self.rec.search(
@@ -262,7 +249,7 @@ class CalorIQBot:
             if not result.empty:
                 main = result.head(1)
 
-        # ===== SIDE DISH =====
+        
         side = None
         if entities["carb"]:
             result = self.rec.search(
@@ -292,13 +279,13 @@ class CalorIQBot:
         total_cal = recs['calories'].sum()
         fits = total_cal <= meal_target
 
-        # Build structured recipe list untuk frontend RecipeCard
+        
         recipes = []
         for i, (_, r) in enumerate(recs.iterrows()):
-            # Ambil steps asli (readable), fallback ke steps_clean jika tidak ada
+            
             steps_raw = r.get('steps_original', [])
             if not isinstance(steps_raw, list) or len(steps_raw) == 0:
-                # Fallback: split steps_clean
+                
                 steps_raw = [s.strip().capitalize() for s in
                              re.split(r'\.\s+|,\s+', str(r.get('steps_clean', '')))
                              if len(s.strip()) > 20][:5]
@@ -315,18 +302,18 @@ class CalorIQBot:
                 "protein": round(float(r['protein']), 1),
                 "fat": round(float(r['fat']), 1),
                 "carbs": round(float(r['carbs']), 1) if pd.notna(r.get('carbs', np.nan)) else 0,
-                "ingredients": ingredients_raw[:10],  # max 10 bahan
-                "steps": steps_raw[:6],               # max 6 langkah
+                "ingredients": ingredients_raw[:10],  
+                "steps": steps_raw[:6],               
             })
 
-        # Summary message — naratif, menyebut nama resep secara eksplisit
+        
         status = "fits your nutritional target" if fits else "Slightly above your recommended calories"
         message = self._build_narrative_message(recipes, query, status, bmi, meal_target, total_cal)
 
         return {"message": message, "recipes": recipes}
 
     def _build_narrative_message(self, recipes, query, status, bmi, meal_target, total_cal):
-        """Susun kalimat pembuka yang naratif (menyebut nama resep), bukan template statis."""
+        
         names = [r["name"] for r in recipes]
 
         if len(names) == 1:
@@ -356,9 +343,7 @@ class CalorIQBot:
 
         return f"{intro}\n\n{stats}"
 
-# ==============================================================================
-# 🚀 INITIALIZATION & FASTAPI API ROUTING
-# ==============================================================================
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
@@ -393,7 +378,7 @@ class ChatRequest(BaseModel):
     query: str
 
 @app.post("/api/chat")
-@app.post("/api/recommend")  # alias agar kompatibel dengan frontend lama
+@app.post("/api/recommend")  
 def chat_endpoint(payload: ChatRequest):
     try:
         user_profile_dict = {
@@ -402,7 +387,7 @@ def chat_endpoint(payload: ChatRequest):
             "weight": payload.profile.weight,
             "height": payload.profile.height
         }
-        # bot.generate sekarang return dict: {"message": str, "recipes": list}
+        
         result = bot.generate(user_profile_dict, payload.query)
         return {
             "response": result["message"],

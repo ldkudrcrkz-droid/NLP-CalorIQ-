@@ -4,7 +4,7 @@ import os
 from sentence_transformers import SentenceTransformer
 
 def main():
-    # Mengambil path folder aktif secara dinamis
+    
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
     CSV_PATH = os.path.join(BASE_DIR, "RAW_recipes.csv")
     PKL_PATH = os.path.join(BASE_DIR, "recipes_embedded.pkl")
@@ -16,16 +16,16 @@ def main():
         
     df = pd.read_csv(CSV_PATH) 
 
-    # Membatasi dataset agar proses pembuatan embedding cepat selesai dan hemat RAM
+    
     print("   Membatasi dataset ke 15.000 baris pertama untuk optimasi...")
     df = df.head(15000).copy()
 
     print("2. Menyiapkan teks gabungan untuk embedding...")
-    # Mengisi kolom kosong agar tidak error saat digabungkan
+    
     df['name'] = df['name'].fillna('')
     df['description'] = df['description'].fillna('')
     
-    # Membuat kolom gabungan baru sebagai representasi konten resep untuk SBERT
+    
     df['text_for_embedding'] = "Recipe Name: " + df['name'] + ". Description: " + df['description']
 
     print("3. Memuat model SentenceTransformer (SBERT)...")

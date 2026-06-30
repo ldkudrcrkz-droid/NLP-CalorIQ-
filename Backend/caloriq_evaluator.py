@@ -11,10 +11,7 @@ from sentence_transformers import util
 import re
 
 
-# =========================
-# 1. SBERT SIMILARITY SCORE
-#    (sudah ada di model, tinggal di-expose)
-# =========================
+
 def score_retrieval(rec_system, query: str, results: pd.DataFrame) -> dict:
     """
     Hitung cosine similarity antara query dan setiap hasil rekomendasi.
@@ -34,10 +31,7 @@ def score_retrieval(rec_system, query: str, results: pd.DataFrame) -> dict:
     }
 
 
-# =========================
-# 2. NDCG@k
-#    Ideal: semua item relevant → DCG = IDCG
-# =========================
+
 def ndcg_at_k(scores: list, k: int = 5) -> float:
     """
     Hitung NDCG@k menggunakan cosine similarity sebagai relevance proxy.
@@ -49,9 +43,7 @@ def ndcg_at_k(scores: list, k: int = 5) -> float:
     return float(dcg / idcg) if idcg > 0 else 0.0
 
 
-# =========================
-# 3. NUTRITIONAL FIT SCORE
-# =========================
+
 def score_nutrition(results: pd.DataFrame, meal_target: float) -> dict:
     """
     Evaluasi kesesuaian nutrisi hasil rekomendasi terhadap target kalori.
@@ -68,18 +60,17 @@ def score_nutrition(results: pd.DataFrame, meal_target: float) -> dict:
             "avg_fat_g": 0.0,
         }
 
-    # SEBELUMNYA: results['calories'].sum() -> Mengasumsikan user makan 5 porsi sekaligus
-    # SEKARANG: Menggunakan .mean() karena sistem memberikan 5 pilihan alternatif menu tunggal
+
     avg_cal     = results['calories'].mean() 
     calorie_gap = abs(avg_cal - meal_target)
     
-    # Menu dinilai COCOK jika rata-rata opsi alternatif berada di bawah batas target gizi user
+   
     fit         = avg_cal <= meal_target
 
     avg_protein = results['protein'].mean()
     avg_fat     = results['fat'].mean()
 
-    # Hitung akurasi kedekatan kalori terhadap batas target energi
+    
     cal_accuracy = max(0.0, 1.0 - (calorie_gap / meal_target))
 
     return {
@@ -92,9 +83,7 @@ def score_nutrition(results: pd.DataFrame, meal_target: float) -> dict:
         "avg_fat_g":        round(avg_fat, 2),
     }
 
-# =========================
-# 4. PRECISION@k (dengan threshold)
-# =========================
+
 def precision_at_k(scores: list, threshold: float = 0.25, k: int = 5) -> float:
     """
     Berapa banyak dari top-k hasil yang memiliki cosine similarity >= threshold?
@@ -104,9 +93,7 @@ def precision_at_k(scores: list, threshold: float = 0.25, k: int = 5) -> float:
     return round(relevant / min(k, len(scores)), 4)
 
 
-# =========================
-# 5. ENTITY HIT RATE & COVERAGE RATE
-# =========================
+
 def score_system(query: str, results: pd.DataFrame, entities: dict) -> dict:
     """
     Evaluasi kualitas entity extraction dan fallback coverage.
@@ -118,7 +105,7 @@ def score_system(query: str, results: pd.DataFrame, entities: dict) -> dict:
     )
     used_fallback = len(all_entities) == 0
 
-    # Cek apakah entitas muncul di hasil rekomendasi
+    
     hit_count = 0
     if all_entities and not results.empty:
         combined_text = " ".join(results['combined'].tolist())
@@ -136,9 +123,7 @@ def score_system(query: str, results: pd.DataFrame, entities: dict) -> dict:
     }
 
 
-# =========================
-# 6. FULL EVALUATION PIPELINE
-# =========================
+
 def evaluate(rec_system, bot, profile: dict, query: str, k: int = 5) -> dict:
     """
     Jalankan semua metrik sekaligus untuk satu query.
@@ -149,19 +134,19 @@ def evaluate(rec_system, bot, profile: dict, query: str, k: int = 5) -> dict:
         results = evaluate(rec_system, bot, profile, query)
         print(results)
     """
-    from CalorIQ_model import extract_entities  # sesuaikan dengan nama file kamu
+    from CalorIQ_model import extract_entities  
 
-    # --- Hitung target kalori sama seperti di bot.generate ---
+    
     bmi      = profile['weight'] / ((profile['height'] / 100) ** 2)
     bmr      = 10 * profile['weight'] + 6.25 * profile['height'] - 5 * profile['age'] + 5
     meal_target = bmr * 1.2 * 0.3
 
-    # --- Ambil hasil rekomendasi ---
+    
     constraints = {"low_fat": "low fat" in query.lower()}
     entities    = extract_entities(query)
     results     = rec_system.search(query, constraints, top_n=k)
 
-    # --- Hitung semua skor ---
+    
     retrieval   = score_retrieval(rec_system, query, results)
     nutrition   = score_nutrition(results, meal_target)
     system      = score_system(query, results, entities)
@@ -169,7 +154,7 @@ def evaluate(rec_system, bot, profile: dict, query: str, k: int = 5) -> dict:
     ndcg        = ndcg_at_k(retrieval["scores"], k=k)
     precision   = precision_at_k(retrieval["scores"], threshold=0.25, k=k)
 
-    # --- Composite score (bisa dikustomisasi bobotnya) ---
+    
     composite = round(
         0.4 * retrieval["cosine_mean"] +
         0.3 * nutrition["calorie_accuracy"] +
@@ -192,18 +177,9 @@ def evaluate(rec_system, bot, profile: dict, query: str, k: int = 5) -> dict:
     }
 
 
-# =========================
-# 7. BATCH EVALUATOR
-# =========================
-def batch_evaluate(rec_system, bot, profile: dict, queries: list) -> pd.DataFrame:
-    """
-    Evaluasi beberapa query sekaligus dan kembalikan sebagai DataFrame.
 
-    Contoh output:
-        | query | composite_score | ndcg_at_k | calorie_accuracy | entity_hit_rate |
-        |-------|-----------------|-----------|------------------|-----------------|
-        | ...   | 0.72            | 0.85      | 0.91             | 1.0             |
-    """
+def batch_evaluate(rec_system, bot, profile: dict, queries: list) -> pd.DataFrame:
+    
     rows = []
     for q in queries:
         try:
@@ -225,9 +201,7 @@ def batch_evaluate(rec_system, bot, profile: dict, queries: list) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
-# =========================
-# CONTOH PEMAKAIAN
-# =========================
+
 if __name__ == "__main__":
     from CalorIQ_model import load_or_preprocess, SBERTRecommender, CalorIQBot
 
